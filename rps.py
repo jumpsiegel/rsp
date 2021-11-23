@@ -1,6 +1,7 @@
 from time import time, sleep
 from typing import List, Tuple, Dict, Any, Optional, Union
 from base64 import b64decode
+import base64
 
 from algosdk.v2client.algod import AlgodClient
 from algosdk.kmd import KMDClient
@@ -178,7 +179,35 @@ class RPS:
         teal = compileTeal(contract, mode=Mode.Application, version=5)
         response = client.compile(teal)
         return b64decode(response["result"])
+
+    # helper function that formats global state for printing
+    def format_state(self, state):
+        formatted = {}
+        for item in state:
+            key = item['key']
+            value = item['value']
+            formatted_key = base64.b64decode(key).decode('utf-8')
+            if value['type'] == 1:
+                # byte string
+                if formatted_key == 'voted':
+                    formatted_value = base64.b64decode(value['bytes']).decode('utf-8')
+                else:
+                    formatted_value = value['bytes']
+                formatted[formatted_key] = formatted_value
+            else:
+                # integer
+                formatted[formatted_key] = value['uint']
+        return formatted
     
+    # helper function to read app global state
+    def read_global_state(self, client, addr, app_id):
+        results = client.account_info(addr)
+        apps_created = results['created-apps']
+        for app in apps_created:
+            if app['id'] == app_id:
+                return self.format_state(app['params']['global-state'])
+        return {}
+        
     def getContracts(self, client: AlgodClient) -> Tuple[bytes, bytes]:
         if len(self.APPROVAL_PROGRAM) == 0:
             def approval_program(): 
@@ -367,8 +396,6 @@ class RPS:
     def simple_rps(self):
         client = self.getAlgodClient()
 
-        approval, clear = self.getContracts(client)
-
         print("Generating the player accounts...")
         player1 = self.getTemporaryAccount(client)
 
@@ -386,6 +413,9 @@ class RPS:
             sender=player1
         )
         print("appID = " + str(appID))
+
+        print("application state")
+        pprint.pprint(self.read_global_state(client, player1.getAddress(), appID))
 
         print("application assets")
         pprint.pprint(self.getBalances(client, get_application_address(appID)))
@@ -413,6 +443,9 @@ class RPS:
         pprint.pprint(self.getBalances(client, player1.getAddress()))
         print("application assets")
         pprint.pprint(self.getBalances(client, get_application_address(appID)))
+
+        print("application state")
+        pprint.pprint(self.read_global_state(client, player1.getAddress(), appID))
         
         # 5. Player 1 throws down hash of move
         #    reject if hash already submitted
