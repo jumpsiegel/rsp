@@ -2,6 +2,7 @@ from time import time, sleep
 from typing import List, Tuple, Dict, Any, Optional, Union
 from base64 import b64decode
 import base64
+import random
 
 from algosdk.v2client.algod import AlgodClient
 from algosdk.kmd import KMDClient
@@ -446,6 +447,17 @@ class RPS:
 
         print("application state")
         pprint.pprint(self.read_global_state(client, player1.getAddress(), appID))
+
+        moves = [ "rock", "scissors", "paper" ]
+        player1_move = bytes(moves[random.randint(0, 2)] + str(random.random()), "ascii")
+        player1_move_hash = base64.b64encode(hashlib.sha256(player1_move).digest()).decode()
+
+        print("Player1 move (" + str(player1_move) + ") hashes to ( " + player1_move_hash)
+
+        player2_move = bytes(moves[random.randint(0, 2)] + str(random.random()), "ascii")
+        player2_move_hash = base64.b64encode(hashlib.sha256(player2_move).digest()).decode()
+
+        print("Player2 move (" + str(player2_move) + ") hashes to ( " + player2_move_hash)
         
         # 5. Player 1 throws down hash of move
         #    reject if hash already submitted
