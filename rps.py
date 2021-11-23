@@ -158,6 +158,22 @@ class RPS:
     def getAlgodClient(self) -> AlgodClient:
         return AlgodClient(self.ALGOD_TOKEN, self.ALGOD_ADDRESS)
 
+    def getBalances(self, client: AlgodClient, account: str) -> Dict[int, int]:
+        balances: Dict[int, int] = dict()
+    
+        accountInfo = client.account_info(account)
+    
+        # set key 0 to Algo balance
+        balances[0] = accountInfo["amount"]
+    
+        assets: List[Dict[str, Any]] = accountInfo.get("assets", [])
+        for assetHolding in assets:
+            assetID = assetHolding["asset-id"]
+            amount = assetHolding["amount"]
+            balances[assetID] = amount
+    
+        return balances
+
     def fullyCompileContract(self, client: AlgodClient, contract: Expr) -> bytes:
         teal = compileTeal(contract, mode=Mode.Application, version=5)
         response = client.compile(teal)
@@ -166,8 +182,108 @@ class RPS:
     def getContracts(self, client: AlgodClient) -> Tuple[bytes, bytes]:
         if len(self.APPROVAL_PROGRAM) == 0:
             def approval_program(): 
-                program = Seq(
-                    Approve()
+                player1_account_key = Bytes("player1_account")
+                player1_amount_key = Bytes("player1_amount")
+                player2_account_key = Bytes("player2_account")
+                player2_amount_key = Bytes("player2_amount")
+
+                on_create = Seq(
+                    App.globalPut(player1_account_key, Global.zero_address()),
+                    App.globalPut(player2_account_key, Global.zero_address()),
+                    Approve(),
+                )
+
+                on_bid_txn_index = Txn.group_index() - Int(1)
+
+                on_bid = Seq(
+                    Assert(
+                        And(
+                            Gtxn[on_bid_txn_index].type_enum() == TxnType.Payment,
+                            Gtxn[on_bid_txn_index].sender() == Txn.sender(),
+                            Gtxn[on_bid_txn_index].receiver()
+                            == Global.current_application_address(),
+                            Gtxn[on_bid_txn_index].amount() >= Global.min_txn_fee(),
+                        )
+                    ),
+                    Cond(
+                        [App.globalGet(player1_account_key) == Global.zero_address(),
+                         Seq(
+                             App.globalPut(player1_amount_key, Gtxn[on_bid_txn_index].amount()),
+                             App.globalPut(player1_account_key, Gtxn[on_bid_txn_index].sender()),
+                             Approve(),
+                         )],
+                        [App.globalGet(player1_account_key) == Gtxn[on_bid_txn_index].sender(), 
+                         Seq(
+                            App.globalPut(player1_amount_key, App.globalGet(player1_amount_key) + Gtxn[on_bid_txn_index].amount()),
+                            Approve(),
+                        )],
+                        [ App.globalGet(player2_account_key) == Global.zero_address(),
+                        Seq(
+                            App.globalPut(player2_amount_key, Gtxn[on_bid_txn_index].amount()),
+                            App.globalPut(player2_account_key, Gtxn[on_bid_txn_index].sender()),
+                            Approve(),
+                        )],
+                        [App.globalGet(player2_account_key) == Gtxn[on_bid_txn_index].sender(),
+                         Seq(
+                            App.globalPut(player2_amount_key, App.globalGet(player2_amount_key) + Gtxn[on_bid_txn_index].amount()),
+                            Approve(),
+                        )]
+                    ),
+                    Reject(),
+                )
+
+                @Subroutine(TealType.none)
+                def closeAccountTo(account: Expr) -> Expr:
+                    return If(Balance(Global.current_application_address()) != Int(0)).Then(
+                        Seq(
+                            InnerTxnBuilder.Begin(),
+                            InnerTxnBuilder.SetFields(
+                                {
+                                    TxnField.type_enum: TxnType.Payment,
+                                    TxnField.close_remainder_to: account,
+                                }
+                            ),
+                            InnerTxnBuilder.Submit(),
+                        )
+                    )
+
+                on_delete = Seq(
+#                    Seq(
+#                        # the auction has not yet started, it's ok to delete
+#                            Assert(
+#                                Or(
+#                                    # sender must either be the seller or the auction creator
+#                                    Txn.sender() == App.globalGet(seller_key),
+#                                    Txn.sender() == Global.creator_address(),
+#                                )
+#                            ),
+#                        # if the auction contract still has funds, send them all to the seller
+#                        closeAccountTo(App.globalGet(seller_key)),
+#                        Approve(),
+#                    ),
+#                    Reject(),
+#
+                    # All our money is lost... sorry, tell josh to finish this
+                    Approve(),
+                )
+
+                on_call_method = Txn.application_args[0]
+                on_call = Cond(
+                    [on_call_method == Bytes("bid"), on_bid]
+                )
+
+                program = Cond(
+                    [Txn.application_id() == Int(0), on_create],
+                    [Txn.on_completion() == OnComplete.NoOp, on_call],
+                    [Txn.on_completion() == OnComplete.DeleteApplication, on_delete],
+                    [
+                        Or(
+                            Txn.on_completion() == OnComplete.OptIn,
+                            Txn.on_completion() == OnComplete.CloseOut,
+                            Txn.on_completion() == OnComplete.UpdateApplication,
+                        ),
+                        Reject(),
+                    ],
                 )
                 return program
         
@@ -194,7 +310,7 @@ class RPS:
     ) -> int:
         approval, clear = self.getContracts(client)
     
-        globalSchema = transaction.StateSchema(num_uints=7, num_byte_slices=2)
+        globalSchema = transaction.StateSchema(num_uints=2, num_byte_slices=2)
         localSchema = transaction.StateSchema(num_uints=0, num_byte_slices=0)
     
         app_args = [ ]
@@ -218,54 +334,51 @@ class RPS:
         assert response.applicationIndex is not None and response.applicationIndex > 0
         return response.applicationIndex
 
-    def setupRPSApp(
-        self,
-        client: AlgodClient,
-        appID: int,
-        funder: Account
-    ) -> None:
+    def placeBid(self, client: AlgodClient, appID: int, bidder: Account, bidAmount: int) -> None:
         appAddr = get_application_address(appID)
     
         suggestedParams = client.suggested_params()
     
-        fundingAmount = (
-            # min account balance
-            100_000
-            # 3 * min txn fee
-            + 3 * 1_000
-        )
-    
-        fundAppTxn = transaction.PaymentTxn(
-            sender=funder.getAddress(),
+        payTxn = transaction.PaymentTxn(
+            sender=bidder.getAddress(),
             receiver=appAddr,
-            amt=fundingAmount,
+            amt=bidAmount,
             sp=suggestedParams,
         )
     
-        setupTxn = transaction.ApplicationCallTxn(
-            sender=funder.getAddress(),
+        appCallTxn = transaction.ApplicationCallTxn(
+            sender=bidder.getAddress(),
             index=appID,
             on_complete=transaction.OnComplete.NoOpOC,
-            app_args=[b"setup"],
+            app_args=[b"bid"],
             sp=suggestedParams,
         )
+
+        transaction.assign_group_id([payTxn, appCallTxn])
     
-        transaction.assign_group_id([fundAppTxn, setupTxn])
+        signedPayTxn = payTxn.sign(bidder.getPrivateKey())
+        signedAppCallTxn = appCallTxn.sign(bidder.getPrivateKey())
     
-        signedFundAppTxn = fundAppTxn.sign(funder.getPrivateKey())
-        signedSetupTxn = setupTxn.sign(funder.getPrivateKey())
+        client.send_transactions([signedPayTxn, signedAppCallTxn])
     
-        client.send_transactions([signedFundAppTxn, signedSetupTxn])
+        self.waitForTransaction(client, appCallTxn.get_txid())
     
-        self.waitForTransaction(client, signedFundAppTxn.get_txid())
-        
     # Rock-Scissors-Paper on the algorand block chain
     def simple_rps(self):
         client = self.getAlgodClient()
 
+        approval, clear = self.getContracts(client)
+
         print("Generating the player accounts...")
         player1 = self.getTemporaryAccount(client)
+
+        print("player1 assets")
+        pprint.pprint(self.getBalances(client, player1.getAddress()))
+
         player2 = self.getTemporaryAccount(client)
+
+        print("player2 assets")
+        pprint.pprint(self.getBalances(client, player2.getAddress()))
 
         print("Creating the RPS app")
         appID = self.createRPSApp(
@@ -274,11 +387,33 @@ class RPS:
         )
         print("appID = " + str(appID))
 
-        self.setupRPSApp(client, appID, player1)
+        print("application assets")
+        pprint.pprint(self.getBalances(client, get_application_address(appID)))
+
+        print("player 1 bids 300000")
+        self.placeBid(client, appID, player1, 300000)
+
+        print("player1 assets")
+        pprint.pprint(self.getBalances(client, player1.getAddress()))
+        print("application assets")
+        pprint.pprint(self.getBalances(client, get_application_address(appID)))
+
+        print("player 2 bids 301500")
+        self.placeBid(client, appID, player2, 301500)
+
+        print("player2 assets")
+        pprint.pprint(self.getBalances(client, player2.getAddress()))
+        print("application assets")
+        pprint.pprint(self.getBalances(client, get_application_address(appID)))
+
+        print("player 1 calls for 1500")
+        self.placeBid(client, appID, player1, 1500)
+
+        print("player1 assets")
+        pprint.pprint(self.getBalances(client, player1.getAddress()))
+        print("application assets")
+        pprint.pprint(self.getBalances(client, get_application_address(appID)))
         
-        # 2. Player 1 Bids
-        # 3. Player 2 Bids/Calls
-        # 4. Player 1 Bids/Calls
         # 5. Player 1 throws down hash of move
         #    reject if hash already submitted
         # 6. Player 2 throws down hash of move
