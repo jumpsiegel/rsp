@@ -1,0 +1,159 @@
+#pragma version 5
+txn ApplicationID
+int 0
+==
+bnz main_l19
+txn OnCompletion
+int NoOp
+==
+bnz main_l7
+txn OnCompletion
+int DeleteApplication
+==
+bnz main_l6
+txn OnCompletion
+int OptIn
+==
+txn OnCompletion
+int CloseOut
+==
+||
+txn OnCompletion
+int UpdateApplication
+==
+||
+bnz main_l5
+err
+main_l5:
+int 0
+return
+main_l6:
+int 1
+return
+main_l7:
+txna ApplicationArgs 0
+byte "bid"
+==
+bnz main_l9
+err
+main_l9:
+txn GroupIndex
+int 1
+-
+gtxns TypeEnum
+int pay
+==
+txn GroupIndex
+int 1
+-
+gtxns Sender
+txn Sender
+==
+&&
+txn GroupIndex
+int 1
+-
+gtxns Receiver
+global CurrentApplicationAddress
+==
+&&
+txn GroupIndex
+int 1
+-
+gtxns Amount
+global MinTxnFee
+>=
+&&
+assert
+byte "player1_account"
+app_global_get
+global ZeroAddress
+==
+bnz main_l18
+byte "player1_account"
+app_global_get
+txn GroupIndex
+int 1
+-
+gtxns Sender
+==
+bnz main_l17
+byte "player2_account"
+app_global_get
+global ZeroAddress
+==
+bnz main_l16
+byte "player2_account"
+app_global_get
+txn GroupIndex
+int 1
+-
+gtxns Sender
+==
+bnz main_l14
+err
+main_l14:
+byte "player2_amount"
+byte "player2_amount"
+app_global_get
+txn GroupIndex
+int 1
+-
+gtxns Amount
++
+app_global_put
+int 1
+return
+int 0
+return
+main_l16:
+byte "player2_amount"
+txn GroupIndex
+int 1
+-
+gtxns Amount
+app_global_put
+byte "player2_account"
+txn GroupIndex
+int 1
+-
+gtxns Sender
+app_global_put
+int 1
+return
+main_l17:
+byte "player1_amount"
+byte "player1_amount"
+app_global_get
+txn GroupIndex
+int 1
+-
+gtxns Amount
++
+app_global_put
+int 1
+return
+main_l18:
+byte "player1_amount"
+txn GroupIndex
+int 1
+-
+gtxns Amount
+app_global_put
+byte "player1_account"
+txn GroupIndex
+int 1
+-
+gtxns Sender
+app_global_put
+int 1
+return
+main_l19:
+byte "player1_account"
+global ZeroAddress
+app_global_put
+byte "player2_account"
+global ZeroAddress
+app_global_put
+int 1
+return
