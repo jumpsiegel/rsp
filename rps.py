@@ -213,13 +213,23 @@ class RPS:
         if len(self.APPROVAL_PROGRAM) == 0:
             def approval_program(): 
                 player1_account_key = Bytes("player1_account")
-                player1_amount_key = Bytes("player1_amount")
+                player1_amount_key  = Bytes("player1_amount")
+                player1_hash_key    = Bytes("player1_hash")
+                player1_play_key    = Bytes("player1_play")
                 player2_account_key = Bytes("player2_account")
-                player2_amount_key = Bytes("player2_amount")
+                player2_amount_key  = Bytes("player2_amount")
+                player2_hash_key    = Bytes("player2_hash")
+                player2_play_key    = Bytes("player2_play")
 
                 on_create = Seq(
                     App.globalPut(player1_account_key, Global.zero_address()),
+                    App.globalPut(player1_amount_key, Int(0)),
+                    App.globalPut(player1_hash_key, Bytes("")),
+                    App.globalPut(player1_play_key, Bytes("")),
                     App.globalPut(player2_account_key, Global.zero_address()),
+                    App.globalPut(player2_amount_key, Int(0)),
+                    App.globalPut(player2_hash_key, Bytes("")),
+                    App.globalPut(player2_play_key, Bytes("")),
                     Approve(),
                 )
 
@@ -230,8 +240,7 @@ class RPS:
                         And(
                             Gtxn[on_bid_txn_index].type_enum() == TxnType.Payment,
                             Gtxn[on_bid_txn_index].sender() == Txn.sender(),
-                            Gtxn[on_bid_txn_index].receiver()
-                            == Global.current_application_address(),
+                            Gtxn[on_bid_txn_index].receiver() == Global.current_application_address(),
                             Gtxn[on_bid_txn_index].amount() >= Global.min_txn_fee(),
                         )
                     ),
@@ -258,6 +267,43 @@ class RPS:
                             App.globalPut(player2_amount_key, App.globalGet(player2_amount_key) + Gtxn[on_bid_txn_index].amount()),
                             Approve(),
                         )]
+                    ),
+                    Reject(),
+                )
+
+                on_ready = Seq(
+                    Assert(
+                        And(
+                            # Do we care if both players have played?
+                            App.globalGet(player1_account_key) != Global.zero_address(),
+                            App.globalGet(player2_account_key) != Global.zero_address(),
+                            App.globalGet(player1_amount_key) >= Global.min_txn_fee(),
+                            App.globalGet(player2_amount_key) == App.globalGet(player2_amount_key),
+                            App.globalGet(player1_play_key) == Bytes(""),
+                            App.globalGet(player2_play_key) == Bytes(""),
+                        )
+                    ),
+                    Cond(
+                        [App.globalGet(player1_account_key) == Txn.sender(),  Seq(App.globalPut(player1_hash_key, Txn.application_args[1]), Approve())],
+                        [App.globalGet(player2_account_key) == Txn.sender(),  Seq(App.globalPut(player2_hash_key, Txn.application_args[1]), Approve())]
+                    ),
+                    Reject(),
+                )
+
+                on_play = Seq(
+                    Assert(
+                        And(
+                            App.globalGet(player1_account_key) != Global.zero_address(),
+                            App.globalGet(player2_account_key) != Global.zero_address(),
+                            App.globalGet(player1_amount_key) >= Global.min_txn_fee(),
+                            App.globalGet(player2_amount_key) == App.globalGet(player2_amount_key),
+                            App.globalGet(player1_hash_key) != Bytes(""),
+                            App.globalGet(player2_hash_key) != Bytes(""),
+                        )
+                    ),
+                    Cond(
+                        [App.globalGet(player1_account_key) == Txn.sender(),  Seq(App.globalPut(player1_play_key, Txn.application_args[1]), Approve())],
+                        [App.globalGet(player2_account_key) == Txn.sender(),  Seq(App.globalPut(player2_play_key, Txn.application_args[1]), Approve())]
                     ),
                     Reject(),
                 )
@@ -299,7 +345,8 @@ class RPS:
 
                 on_call_method = Txn.application_args[0]
                 on_call = Cond(
-                    [on_call_method == Bytes("bid"), on_bid]
+                    [on_call_method == Bytes("bid"), on_bid],
+                    [on_call_method == Bytes("ready"), on_ready]
                 )
 
                 program = Cond(
@@ -340,7 +387,7 @@ class RPS:
     ) -> int:
         approval, clear = self.getContracts(client)
     
-        globalSchema = transaction.StateSchema(num_uints=2, num_byte_slices=2)
+        globalSchema = transaction.StateSchema(num_uints=2, num_byte_slices=6)
         localSchema = transaction.StateSchema(num_uints=0, num_byte_slices=0)
     
         app_args = [ ]
@@ -390,6 +437,25 @@ class RPS:
         signedAppCallTxn = appCallTxn.sign(bidder.getPrivateKey())
     
         client.send_transactions([signedPayTxn, signedAppCallTxn])
+    
+        self.waitForTransaction(client, appCallTxn.get_txid())
+
+    def getReady(self, client: AlgodClient, appID: int, player: Account, moveHash: String) -> None:
+        appAddr = get_application_address(appID)
+    
+        suggestedParams = client.suggested_params()
+    
+        appCallTxn = transaction.ApplicationCallTxn(
+            sender=player.getAddress(),
+            index=appID,
+            on_complete=transaction.OnComplete.NoOpOC,
+            app_args=[b"ready", moveHash],
+            sp=suggestedParams,
+        )
+
+        signedAppCallTxn = appCallTxn.sign(player.getPrivateKey())
+    
+        client.send_transactions([signedAppCallTxn])
     
         self.waitForTransaction(client, appCallTxn.get_txid())
     
@@ -458,11 +524,13 @@ class RPS:
         player2_move_hash = base64.b64encode(hashlib.sha256(player2_move).digest()).decode()
 
         print("Player2 move (" + str(player2_move) + ") hashes to ( " + player2_move_hash)
+
+        self.getReady(client, appID, player1, player1_move_hash)
+        self.getReady(client, appID, player2, player2_move_hash)
+
+        print("application state")
+        pprint.pprint(self.read_global_state(client, player1.getAddress(), appID))
         
-        # 5. Player 1 throws down hash of move
-        #    reject if hash already submitted
-        # 6. Player 2 throws down hash of move
-        #    reject if hash already submitted
         # 7. Player 1 throws down move
         #    reject if hash of move does not match what was previously submitted
         # 8. Player 2 throws down move
