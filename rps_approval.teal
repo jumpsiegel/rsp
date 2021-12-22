@@ -2,7 +2,7 @@
 txn ApplicationID
 int 0
 ==
-bnz main_l19
+bnz main_l26
 txn OnCompletion
 int NoOp
 ==
@@ -34,9 +34,70 @@ main_l7:
 txna ApplicationArgs 0
 byte "bid"
 ==
-bnz main_l9
+bnz main_l16
+txna ApplicationArgs 0
+byte "ready"
+==
+bnz main_l10
 err
-main_l9:
+main_l10:
+byte "player1_account"
+app_global_get
+global ZeroAddress
+!=
+byte "player2_account"
+app_global_get
+global ZeroAddress
+!=
+&&
+byte "player1_amount"
+app_global_get
+global MinTxnFee
+>=
+&&
+byte "player2_amount"
+app_global_get
+byte "player2_amount"
+app_global_get
+==
+&&
+byte "player1_play"
+app_global_get
+byte ""
+==
+&&
+byte "player2_play"
+app_global_get
+byte ""
+==
+&&
+assert
+byte "player1_account"
+app_global_get
+txn Sender
+==
+bnz main_l15
+byte "player2_account"
+app_global_get
+txn Sender
+==
+bnz main_l13
+err
+main_l13:
+byte "player2_hash"
+txna ApplicationArgs 1
+app_global_put
+int 1
+return
+int 0
+return
+main_l15:
+byte "player1_hash"
+txna ApplicationArgs 1
+app_global_put
+int 1
+return
+main_l16:
 txn GroupIndex
 int 1
 -
@@ -69,7 +130,7 @@ byte "player1_account"
 app_global_get
 global ZeroAddress
 ==
-bnz main_l18
+bnz main_l25
 byte "player1_account"
 app_global_get
 txn GroupIndex
@@ -77,12 +138,12 @@ int 1
 -
 gtxns Sender
 ==
-bnz main_l17
+bnz main_l24
 byte "player2_account"
 app_global_get
 global ZeroAddress
 ==
-bnz main_l16
+bnz main_l23
 byte "player2_account"
 app_global_get
 txn GroupIndex
@@ -90,9 +151,9 @@ int 1
 -
 gtxns Sender
 ==
-bnz main_l14
+bnz main_l21
 err
-main_l14:
+main_l21:
 byte "player2_amount"
 byte "player2_amount"
 app_global_get
@@ -106,7 +167,7 @@ int 1
 return
 int 0
 return
-main_l16:
+main_l23:
 byte "player2_amount"
 txn GroupIndex
 int 1
@@ -121,7 +182,7 @@ gtxns Sender
 app_global_put
 int 1
 return
-main_l17:
+main_l24:
 byte "player1_amount"
 byte "player1_amount"
 app_global_get
@@ -133,7 +194,7 @@ gtxns Amount
 app_global_put
 int 1
 return
-main_l18:
+main_l25:
 byte "player1_amount"
 txn GroupIndex
 int 1
@@ -148,12 +209,30 @@ gtxns Sender
 app_global_put
 int 1
 return
-main_l19:
+main_l26:
 byte "player1_account"
 global ZeroAddress
 app_global_put
+byte "player1_amount"
+int 0
+app_global_put
+byte "player1_hash"
+byte ""
+app_global_put
+byte "player1_play"
+byte ""
+app_global_put
 byte "player2_account"
 global ZeroAddress
+app_global_put
+byte "player2_amount"
+int 0
+app_global_put
+byte "player2_hash"
+byte ""
+app_global_put
+byte "player2_play"
+byte ""
 app_global_put
 int 1
 return

@@ -3,6 +3,7 @@ from typing import List, Tuple, Dict, Any, Optional, Union
 from base64 import b64decode
 import base64
 import random
+import hashlib
 
 from algosdk.v2client.algod import AlgodClient
 from algosdk.kmd import KMDClient
@@ -20,6 +21,7 @@ class Account:
     def __init__(self, privateKey: str) -> None:
         self.sk = privateKey
         self.addr = account.address_from_private_key(privateKey)
+        print (privateKey + " -> " + self.getMnemonic())
 
     def getAddress(self) -> str:
         return self.addr
@@ -440,7 +442,7 @@ class RPS:
     
         self.waitForTransaction(client, appCallTxn.get_txid())
 
-    def getReady(self, client: AlgodClient, appID: int, player: Account, moveHash: String) -> None:
+    def getReady(self, client: AlgodClient, appID: int, player: Account, moveHash: str) -> None:
         appAddr = get_application_address(appID)
     
         suggestedParams = client.suggested_params()
